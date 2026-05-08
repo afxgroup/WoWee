@@ -551,6 +551,8 @@ static void printUsage(const char* argv0) {
     std::printf("                         Tiling grass texture with random blade highlights (default density=0.15, seed=1)\n");
     std::printf("  --gen-texture-fabric <out.png> <warpHex> <weftHex> [threadPx] [W H]\n");
     std::printf("                         Woven fabric pattern with alternating warp/weft threads (default thread=4px)\n");
+    std::printf("  --gen-texture-cobble <out.png> <stoneHex> <mortarHex> [stonePx] [seed] [W H]\n");
+    std::printf("                         Cobblestone street pattern: irregular packed stones (default stone=24px, seed 1)\n");
     std::printf("  --add-texture-to-zone <zoneDir> <png-path> [renameTo]\n");
     std::printf("                         Copy an existing PNG into <zoneDir> (optionally renaming it on the way in)\n");
     std::printf("  --gen-mesh <wom-base> <cube|plane|sphere|cylinder|torus|cone|ramp> [size]\n");
@@ -584,6 +586,8 @@ static void printUsage(const char* argv0) {
     std::printf("                         Round castle tower with crenellated battlements (default 8 teeth, 0.5m tall)\n");
     std::printf("  --gen-mesh-house <wom-base> [width] [depth] [height] [roofHeight]\n");
     std::printf("                         Simple house: cube body + pyramid roof (default 4×4×3 with 2m roof)\n");
+    std::printf("  --gen-mesh-fountain <wom-base> [basinRadius] [basinHeight] [spoutRadius] [spoutHeight]\n");
+    std::printf("                         Round basin + center spout column (default 1.5/0.5 basin, 0.2/1.5 spout)\n");
     std::printf("                         Procedural tree: cylindrical trunk + spherical foliage (default 0.1/2.0/0.7)\n");
     std::printf("  --displace-mesh <wom-base> <heightmap.png> [scale]\n");
     std::printf("                         Offset each vertex along its normal by heightmap brightness × scale (default 1.0)\n");
@@ -625,6 +629,10 @@ static void printUsage(const char* argv0) {
     std::printf("                         Run both texture-pack + mesh-pack in one pass — full open-format bootstrap\n");
     std::printf("  --gen-project-starter-pack <projectDir> [--seed N]\n");
     std::printf("                         Run starter-pack + audio-pack across every zone — full project-scope bootstrap\n");
+    std::printf("  --info-zone-summary <zoneDir> [--json]\n");
+    std::printf("                         One-glance health digest for a zone: pack counts/bytes + audit pass/fail\n");
+    std::printf("  --info-project-summary <projectDir> [--json]\n");
+    std::printf("                         One-glance status table per zone in a project (BOOTSTRAPPED/PARTIAL/EMPTY)\n");
     std::printf("  --validate-zone-pack <zoneDir> [--json]\n");
     std::printf("                         Audit a zone's open-format asset pack: textures/meshes/audio counts + WOM validity\n");
     std::printf("  --validate-project-packs <projectDir>\n");
@@ -941,7 +949,7 @@ static void printUsage(const char* argv0) {
     std::printf("                         Single-mesh detail: bounds, version, batches, bones, textures, attachments in one view\n");
     std::printf("  --info-mesh-storage-budget <wom-base> [--json]\n");
     std::printf("                         Estimated bytes-per-category breakdown for a single WOM (vertices/indices/bones/...)\n");
-    std::printf("  --list-project-meshes <projectDir> [--json]\n");
+    std::printf("  --list-project-meshes-detail <projectDir> [--json]\n");
     std::printf("                         Per-mesh listing across every zone in a project (sorted by triangle count)\n");
     std::printf("  --info-project-models-total <projectDir> [--json]\n");
     std::printf("                         Aggregate WOM/WOB stats across an entire project (per-zone breakdown + totals)\n");
@@ -1075,7 +1083,7 @@ int main(int argc, char* argv[]) {
         "--list-project-meshes", "--list-project-audio",
         "--list-project-textures",
         "--info-zone-models-total", "--info-project-models-total",
-        "--list-zone-meshes", "--list-project-meshes", "--info-mesh",
+        "--list-zone-meshes", "--list-project-meshes-detail", "--info-mesh",
         "--info-mesh-storage-budget",
         "--info-wob", "--info-woc", "--info-wot",
         "--info-creatures", "--info-objects", "--info-quests",
@@ -1105,7 +1113,7 @@ int main(int argc, char* argv[]) {
         "--gen-mesh-tube", "--gen-mesh-capsule", "--gen-mesh-arch",
         "--gen-mesh-pyramid", "--gen-mesh-fence", "--gen-mesh-tree",
         "--gen-mesh-rock", "--gen-mesh-pillar", "--gen-mesh-bridge",
-        "--gen-mesh-tower", "--gen-mesh-house",
+        "--gen-mesh-tower", "--gen-mesh-house", "--gen-mesh-fountain",
         "--gen-texture-gradient",
         "--gen-mesh-from-heightmap", "--export-mesh-heightmap",
         "--displace-mesh",
@@ -1117,6 +1125,7 @@ int main(int argc, char* argv[]) {
         "--gen-texture-radial", "--gen-texture-stripes", "--gen-texture-dots",
         "--gen-texture-rings", "--gen-texture-checker", "--gen-texture-brick",
         "--gen-texture-wood", "--gen-texture-grass", "--gen-texture-fabric",
+        "--gen-texture-cobble",
         "--validate-glb", "--info-glb", "--info-glb-tree", "--info-glb-bytes",
         "--validate-jsondbc", "--check-glb-bounds", "--validate-stl",
         "--validate-png", "--validate-blp",
@@ -1144,6 +1153,7 @@ int main(int argc, char* argv[]) {
         "--gen-zone-mesh-pack", "--gen-zone-starter-pack",
         "--gen-project-starter-pack", "--gen-audio-tone",
         "--gen-audio-noise", "--gen-audio-sweep", "--gen-zone-audio-pack",
+        "--info-zone-summary", "--info-project-summary",
         "--validate-zone-pack", "--validate-project-packs", "--info-spawn",
         "--diff-zone-spawns",
         "--list-items", "--info-item", "--set-item", "--export-zone-items-md",
@@ -2676,16 +2686,17 @@ int main(int argc, char* argv[]) {
                             r.path.c_str());
             }
             return 0;
-        } else if (std::strcmp(argv[i], "--list-project-meshes") == 0 && i + 1 < argc) {
-            // Project-wide companion to --list-zone-meshes. Walks
-            // every zone in <projectDir>, collects every .wom across
-            // all zones, sorts by triangle count descending, and
-            // reports a global per-mesh table with the originating
-            // zone in the first column.
+        } else if (std::strcmp(argv[i], "--list-project-meshes-detail") == 0 && i + 1 < argc) {
+            // Per-mesh sorted listing across an entire project.
+            // Walks every zone in <projectDir>, collects every .wom,
+            // sorts by triangle count descending, and reports a
+            // global per-mesh table with the originating zone in
+            // the first column.
             //
             // Useful for project-wide outlier detection ("which mesh
             // anywhere in the project is the heaviest?") and for
-            // mesh-sharing audits.
+            // mesh-sharing audits. Companion to --list-project-meshes
+            // (which gives the per-zone aggregate view).
             std::string projectDir = argv[++i];
             bool jsonOut = (i + 1 < argc &&
                             std::strcmp(argv[i + 1], "--json") == 0);
@@ -2693,7 +2704,7 @@ int main(int argc, char* argv[]) {
             namespace fs = std::filesystem;
             if (!fs::exists(projectDir) || !fs::is_directory(projectDir)) {
                 std::fprintf(stderr,
-                    "list-project-meshes: %s is not a directory\n",
+                    "list-project-meshes-detail: %s is not a directory\n",
                     projectDir.c_str());
                 return 1;
             }
@@ -15051,6 +15062,207 @@ int main(int argc, char* argv[]) {
             std::printf("gen-zone-audio-pack: wrote %d of %zu sounds to %s\n",
                         written, jobs.size(), audioDir.string().c_str());
             return written == static_cast<int>(jobs.size()) ? 0 : 1;
+        } else if (std::strcmp(argv[i], "--info-zone-summary") == 0 && i + 1 < argc) {
+            // One-glance health digest for a zone. Combines the per-
+            // category counts/bytes from the inventory commands with
+            // a quick pass/fail signal from validate-zone-pack. Lets
+            // a user see at a glance whether a zone is bootstrapped,
+            // empty, or partially populated.
+            std::string zoneDir = argv[++i];
+            bool jsonOut = (i + 1 < argc &&
+                            std::strcmp(argv[i + 1], "--json") == 0);
+            if (jsonOut) i++;
+            namespace fs = std::filesystem;
+            if (!fs::exists(zoneDir + "/zone.json")) {
+                std::fprintf(stderr,
+                    "info-zone-summary: %s has no zone.json\n", zoneDir.c_str());
+                return 1;
+            }
+            // Load zone.json for the friendly map name.
+            std::string mapName = "?";
+            try {
+                std::ifstream zf(zoneDir + "/zone.json");
+                if (zf) {
+                    nlohmann::json zj;
+                    zf >> zj;
+                    if (zj.contains("mapName") && zj["mapName"].is_string()) {
+                        mapName = zj["mapName"].get<std::string>();
+                    }
+                }
+            } catch (...) { /* tolerated — leave as ? */ }
+            // Per-category quick scan: count + bytes only.
+            auto scan = [&](const std::string& sub, const std::string& ext)
+                -> std::pair<int, uint64_t> {
+                int n = 0;
+                uint64_t b = 0;
+                fs::path p = fs::path(zoneDir) / sub;
+                if (!fs::exists(p)) return {0, 0};
+                std::error_code ec;
+                for (const auto& e : fs::recursive_directory_iterator(p, ec)) {
+                    if (!e.is_regular_file()) continue;
+                    if (e.path().extension() != ext) continue;
+                    n++;
+                    b += e.file_size();
+                }
+                return {n, b};
+            };
+            auto [texN, texB] = scan("textures", ".png");
+            auto [mshN, mshB] = scan("meshes", ".wom");
+            auto [audN, audB] = scan("audio", ".wav");
+            // Pack health: bootstrap pass if we have all three
+            // categories with at least 1 file each. "Partial" if
+            // some but not all. "Empty" if none.
+            std::string status;
+            if (texN > 0 && mshN > 0 && audN > 0) status = "BOOTSTRAPPED";
+            else if (texN + mshN + audN > 0) status = "PARTIAL";
+            else status = "EMPTY";
+            uint64_t totalBytes = texB + mshB + audB;
+            int totalAssets = texN + mshN + audN;
+            if (jsonOut) {
+                nlohmann::json j;
+                j["zone"] = zoneDir;
+                j["mapName"] = mapName;
+                j["status"] = status;
+                j["totalAssets"] = totalAssets;
+                j["totalBytes"] = totalBytes;
+                j["textures"] = {{"count", texN}, {"bytes", texB}};
+                j["meshes"]   = {{"count", mshN}, {"bytes", mshB}};
+                j["audio"]    = {{"count", audN}, {"bytes", audB}};
+                std::printf("%s\n", j.dump(2).c_str());
+                return 0;
+            }
+            std::printf("Zone: %s (%s)\n", mapName.c_str(), zoneDir.c_str());
+            std::printf("  status   : %s\n", status.c_str());
+            std::printf("  textures : %d (%llu bytes)\n",
+                        texN, static_cast<unsigned long long>(texB));
+            std::printf("  meshes   : %d (%llu bytes)\n",
+                        mshN, static_cast<unsigned long long>(mshB));
+            std::printf("  audio    : %d (%llu bytes)\n",
+                        audN, static_cast<unsigned long long>(audB));
+            std::printf("  TOTAL    : %d assets, %llu bytes\n",
+                        totalAssets,
+                        static_cast<unsigned long long>(totalBytes));
+            return 0;
+        } else if (std::strcmp(argv[i], "--info-project-summary") == 0 && i + 1 < argc) {
+            // Project-wide companion to --info-zone-summary. Walks
+            // every zone in <projectDir> and reports a per-zone
+            // status row + per-category counts, plus a project
+            // total at the bottom. Status: BOOTSTRAPPED (all 3
+            // categories non-empty), PARTIAL (some), EMPTY (none).
+            std::string projectDir = argv[++i];
+            bool jsonOut = (i + 1 < argc &&
+                            std::strcmp(argv[i + 1], "--json") == 0);
+            if (jsonOut) i++;
+            namespace fs = std::filesystem;
+            if (!fs::exists(projectDir) || !fs::is_directory(projectDir)) {
+                std::fprintf(stderr,
+                    "info-project-summary: %s is not a directory\n",
+                    projectDir.c_str());
+                return 1;
+            }
+            std::vector<std::string> zones;
+            for (const auto& entry : fs::directory_iterator(projectDir)) {
+                if (!entry.is_directory()) continue;
+                if (!fs::exists(entry.path() / "zone.json")) continue;
+                zones.push_back(entry.path().string());
+            }
+            std::sort(zones.begin(), zones.end());
+            // Same per-category scan logic as info-zone-summary —
+            // duplicated rather than abstracted because the two
+            // commands are read in different contexts and a shared
+            // helper would entrench an internal API for one caller.
+            auto scan = [](const std::string& base, const std::string& sub,
+                           const std::string& ext) -> std::pair<int, uint64_t> {
+                int n = 0;
+                uint64_t b = 0;
+                fs::path p = fs::path(base) / sub;
+                if (!fs::exists(p)) return {0, 0};
+                std::error_code ec;
+                for (const auto& e : fs::recursive_directory_iterator(p, ec)) {
+                    if (!e.is_regular_file()) continue;
+                    if (e.path().extension() != ext) continue;
+                    n++;
+                    b += e.file_size();
+                }
+                return {n, b};
+            };
+            struct ZRow {
+                std::string name;
+                std::string status;
+                int texN = 0, mshN = 0, audN = 0;
+                uint64_t bytes = 0;
+            };
+            std::vector<ZRow> rows;
+            int bootstrapped = 0, partial = 0, empty = 0;
+            uint64_t totalBytes = 0;
+            int totalAssets = 0;
+            for (const auto& z : zones) {
+                ZRow r;
+                r.name = fs::path(z).filename().string();
+                auto [tn, tb] = scan(z, "textures", ".png");
+                auto [mn, mb] = scan(z, "meshes", ".wom");
+                auto [an, ab] = scan(z, "audio", ".wav");
+                r.texN = tn; r.mshN = mn; r.audN = an;
+                r.bytes = tb + mb + ab;
+                if (tn > 0 && mn > 0 && an > 0) {
+                    r.status = "BOOTSTRAPPED";
+                    ++bootstrapped;
+                } else if (tn + mn + an > 0) {
+                    r.status = "PARTIAL";
+                    ++partial;
+                } else {
+                    r.status = "EMPTY";
+                    ++empty;
+                }
+                totalBytes += r.bytes;
+                totalAssets += tn + mn + an;
+                rows.push_back(std::move(r));
+            }
+            if (jsonOut) {
+                nlohmann::json j;
+                j["project"] = projectDir;
+                j["zoneCount"] = rows.size();
+                j["bootstrapped"] = bootstrapped;
+                j["partial"] = partial;
+                j["empty"] = empty;
+                j["totalAssets"] = totalAssets;
+                j["totalBytes"] = totalBytes;
+                nlohmann::json arr = nlohmann::json::array();
+                for (const auto& r : rows) {
+                    arr.push_back({
+                        {"zone", r.name},
+                        {"status", r.status},
+                        {"textures", r.texN},
+                        {"meshes", r.mshN},
+                        {"audio", r.audN},
+                        {"bytes", r.bytes},
+                    });
+                }
+                j["zones"] = arr;
+                std::printf("%s\n", j.dump(2).c_str());
+                return 0;
+            }
+            std::printf("Project: %s\n", projectDir.c_str());
+            std::printf("  zones        : %zu\n", rows.size());
+            std::printf("  bootstrapped : %d\n", bootstrapped);
+            std::printf("  partial      : %d\n", partial);
+            std::printf("  empty        : %d\n", empty);
+            std::printf("  total assets : %d\n", totalAssets);
+            std::printf("  total bytes  : %llu\n",
+                        static_cast<unsigned long long>(totalBytes));
+            if (rows.empty()) {
+                std::printf("  *no zones found*\n");
+                return 0;
+            }
+            std::printf("\n  %-14s %4s %4s %4s %10s  %s\n",
+                        "status", "tex", "msh", "aud", "bytes", "zone");
+            for (const auto& r : rows) {
+                std::printf("  %-14s %4d %4d %4d %10llu  %s\n",
+                            r.status.c_str(), r.texN, r.mshN, r.audN,
+                            static_cast<unsigned long long>(r.bytes),
+                            r.name.c_str());
+            }
+            return 0;
         } else if (std::strcmp(argv[i], "--validate-zone-pack") == 0 && i + 1 < argc) {
             // Audit a zone's open-format asset pack. Reports counts
             // and total bytes per category (textures/, meshes/,
@@ -20087,6 +20299,167 @@ int main(int argc, char* argv[]) {
                         warpHex.c_str(), weftHex.c_str());
             std::printf("  thread px  : %d\n", threadPx);
             return 0;
+        } else if (std::strcmp(argv[i], "--gen-texture-cobble") == 0 && i + 3 < argc) {
+            // Cobblestone street pattern. Each pixel finds its
+            // nearest "stone center" in a perturbed grid (Worley-
+            // style cellular noise) and uses the distance to that
+            // center to draw the stone face vs. mortar gaps. Stones
+            // get small per-stone tint variation so the surface
+            // doesn't read as flat.
+            std::string outPath = argv[++i];
+            std::string stoneHex = argv[++i];
+            std::string mortarHex = argv[++i];
+            int stonePx = 24;
+            uint32_t seed = 1;
+            int W = 256, H = 256;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try { stonePx = std::stoi(argv[++i]); } catch (...) {}
+            }
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try { seed = static_cast<uint32_t>(std::stoul(argv[++i])); } catch (...) {}
+            }
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try { W = std::stoi(argv[++i]); } catch (...) {}
+            }
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try { H = std::stoi(argv[++i]); } catch (...) {}
+            }
+            if (W < 1 || H < 1 || W > 8192 || H > 8192 ||
+                stonePx < 8 || stonePx > 512) {
+                std::fprintf(stderr,
+                    "gen-texture-cobble: invalid dims (W/H 1..8192, stonePx 8..512)\n");
+                return 1;
+            }
+            auto parseHex = [](std::string hex,
+                                uint8_t& r, uint8_t& g, uint8_t& b) -> bool {
+                std::transform(hex.begin(), hex.end(), hex.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+                if (!hex.empty() && hex[0] == '#') hex.erase(0, 1);
+                auto fromHexC = [](char c) -> int {
+                    if (c >= '0' && c <= '9') return c - '0';
+                    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+                    return -1;
+                };
+                int v[6];
+                if (hex.size() == 6) {
+                    for (int k = 0; k < 6; ++k) {
+                        v[k] = fromHexC(hex[k]);
+                        if (v[k] < 0) return false;
+                    }
+                    r = static_cast<uint8_t>((v[0] << 4) | v[1]);
+                    g = static_cast<uint8_t>((v[2] << 4) | v[3]);
+                    b = static_cast<uint8_t>((v[4] << 4) | v[5]);
+                    return true;
+                }
+                if (hex.size() == 3) {
+                    for (int k = 0; k < 3; ++k) {
+                        v[k] = fromHexC(hex[k]);
+                        if (v[k] < 0) return false;
+                    }
+                    r = static_cast<uint8_t>((v[0] << 4) | v[0]);
+                    g = static_cast<uint8_t>((v[1] << 4) | v[1]);
+                    b = static_cast<uint8_t>((v[2] << 4) | v[2]);
+                    return true;
+                }
+                return false;
+            };
+            uint8_t sr, sg, sb, mr, mg, mb;
+            if (!parseHex(stoneHex, sr, sg, sb)) {
+                std::fprintf(stderr,
+                    "gen-texture-cobble: '%s' is not a valid hex color\n",
+                    stoneHex.c_str());
+                return 1;
+            }
+            if (!parseHex(mortarHex, mr, mg, mb)) {
+                std::fprintf(stderr,
+                    "gen-texture-cobble: '%s' is not a valid hex color\n",
+                    mortarHex.c_str());
+                return 1;
+            }
+            // Seeded hash → stone center jitter + per-stone tint.
+            // Hash takes (cellX, cellY, seed) and returns 4 floats
+            // in [0,1): two for offset, two for tint variation.
+            auto hash01 = [seed](int cx, int cy, int comp) -> float {
+                uint32_t h = static_cast<uint32_t>(cx) * 374761393u +
+                             static_cast<uint32_t>(cy) * 668265263u +
+                             seed * 2147483647u +
+                             static_cast<uint32_t>(comp) * 16777619u;
+                h = (h ^ (h >> 13)) * 1274126177u;
+                h = h ^ (h >> 16);
+                return (h >> 8) * (1.0f / 16777216.0f);
+            };
+            std::vector<uint8_t> pixels(static_cast<size_t>(W) * H * 3, 0);
+            // For each pixel, find min distance among 9 neighboring
+            // jittered cell centers (3x3 around current cell). The
+            // closest center owns the pixel; second-closest sets
+            // mortar boundary distance.
+            for (int y = 0; y < H; ++y) {
+                int cy0 = y / stonePx;
+                for (int x = 0; x < W; ++x) {
+                    int cx0 = x / stonePx;
+                    float bestD = 1e9f, second = 1e9f;
+                    int bestCx = 0, bestCy = 0;
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            int cx = cx0 + dx;
+                            int cy = cy0 + dy;
+                            float jx = (hash01(cx, cy, 0) - 0.5f) * 0.7f;
+                            float jy = (hash01(cx, cy, 1) - 0.5f) * 0.7f;
+                            float ccx = (cx + 0.5f + jx) * stonePx;
+                            float ccy = (cy + 0.5f + jy) * stonePx;
+                            float dxp = x - ccx, dyp = y - ccy;
+                            float d = std::sqrt(dxp * dxp + dyp * dyp);
+                            if (d < bestD) {
+                                second = bestD;
+                                bestD = d;
+                                bestCx = cx;
+                                bestCy = cy;
+                            } else if (d < second) {
+                                second = d;
+                            }
+                        }
+                    }
+                    // Pixels close to the boundary (small gap between
+                    // closest and second-closest) become mortar.
+                    float boundary = second - bestD;
+                    float mortarThresh = stonePx * 0.10f;
+                    if (boundary < mortarThresh) {
+                        size_t i2 = (static_cast<size_t>(y) * W + x) * 3;
+                        pixels[i2 + 0] = mr;
+                        pixels[i2 + 1] = mg;
+                        pixels[i2 + 2] = mb;
+                    } else {
+                        // Per-stone tint: ±15% on each channel.
+                        float tint = 0.85f + 0.30f * hash01(bestCx, bestCy, 2);
+                        // Subtle radial darkening toward edges so
+                        // the stone face reads as 3D rounded.
+                        float edgeFalloff = std::min(1.0f,
+                            (boundary - mortarThresh) / (stonePx * 0.4f));
+                        float shade = (0.7f + 0.3f * edgeFalloff) * tint;
+                        size_t i2 = (static_cast<size_t>(y) * W + x) * 3;
+                        pixels[i2 + 0] = static_cast<uint8_t>(
+                            std::clamp(sr * shade, 0.0f, 255.0f));
+                        pixels[i2 + 1] = static_cast<uint8_t>(
+                            std::clamp(sg * shade, 0.0f, 255.0f));
+                        pixels[i2 + 2] = static_cast<uint8_t>(
+                            std::clamp(sb * shade, 0.0f, 255.0f));
+                    }
+                }
+            }
+            if (!stbi_write_png(outPath.c_str(), W, H, 3,
+                                pixels.data(), W * 3)) {
+                std::fprintf(stderr,
+                    "gen-texture-cobble: stbi_write_png failed for %s\n",
+                    outPath.c_str());
+                return 1;
+            }
+            std::printf("Wrote %s\n", outPath.c_str());
+            std::printf("  size         : %dx%d\n", W, H);
+            std::printf("  stone/mortar : %s / %s\n",
+                        stoneHex.c_str(), mortarHex.c_str());
+            std::printf("  stone px     : %d\n", stonePx);
+            std::printf("  seed         : %u\n", seed);
+            return 0;
         } else if (std::strcmp(argv[i], "--gen-mesh") == 0 && i + 2 < argc) {
             // Synthesize a procedural primitive WOM. Generates proper
             // per-face normals, planar UVs, a bounding box, and a
@@ -22395,6 +22768,115 @@ int main(int argc, char* argv[]) {
             std::printf("  roof H     : %.3f (apex %.3f)\n", roofH, apexY);
             std::printf("  vertices   : %zu\n", wom.vertices.size());
             std::printf("  triangles  : %zu\n", wom.indices.size() / 3);
+            return 0;
+        } else if (std::strcmp(argv[i], "--gen-mesh-fountain") == 0 && i + 1 < argc) {
+            // Procedural fountain: low cylindrical basin with a
+            // narrower spout column rising from its center. Solid
+            // basin (not hollow) for simplicity — readable as a
+            // fountain because of the spout silhouette. Useful for
+            // town squares, plazas, garden centerpieces.
+            //
+            // The 21st procedural mesh primitive.
+            std::string womBase = argv[++i];
+            float basinR = 1.5f;
+            float basinH = 0.5f;
+            float spoutR = 0.2f;
+            float spoutH = 1.5f;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try { basinR = std::stof(argv[++i]); } catch (...) {}
+            }
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try { basinH = std::stof(argv[++i]); } catch (...) {}
+            }
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try { spoutR = std::stof(argv[++i]); } catch (...) {}
+            }
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try { spoutH = std::stof(argv[++i]); } catch (...) {}
+            }
+            if (basinR <= 0 || basinH <= 0 || spoutR <= 0 || spoutH <= 0 ||
+                spoutR >= basinR) {
+                std::fprintf(stderr,
+                    "gen-mesh-fountain: all dims > 0; spoutR must be < basinR\n");
+                return 1;
+            }
+            if (womBase.size() >= 4 &&
+                womBase.substr(womBase.size() - 4) == ".wom") {
+                womBase = womBase.substr(0, womBase.size() - 4);
+            }
+            wowee::pipeline::WoweeModel wom;
+            wom.name = std::filesystem::path(womBase).stem().string();
+            wom.version = 3;
+            const float pi = 3.14159265358979f;
+            const int segs = 24;
+            auto addV = [&](glm::vec3 p, glm::vec3 n, glm::vec2 uv) -> uint32_t {
+                wowee::pipeline::WoweeModel::Vertex vtx;
+                vtx.position = p; vtx.normal = n; vtx.texCoord = uv;
+                wom.vertices.push_back(vtx);
+                return static_cast<uint32_t>(wom.vertices.size() - 1);
+            };
+            // Cylinder helper: build side ring + caps from y0 to y1
+            // at given radius. Returns when done; indices appended
+            // directly. Side ring is 2× (segs+1) verts at y0 then y1.
+            auto cylinder = [&](float r, float y0, float y1) {
+                uint32_t bot = static_cast<uint32_t>(wom.vertices.size());
+                for (int sg = 0; sg <= segs; ++sg) {
+                    float u = static_cast<float>(sg) / segs;
+                    float ang = u * 2.0f * pi;
+                    glm::vec3 p(r * std::cos(ang), y0, r * std::sin(ang));
+                    glm::vec3 n(std::cos(ang), 0, std::sin(ang));
+                    addV(p, n, glm::vec2(u, 0));
+                }
+                uint32_t top = static_cast<uint32_t>(wom.vertices.size());
+                for (int sg = 0; sg <= segs; ++sg) {
+                    float u = static_cast<float>(sg) / segs;
+                    float ang = u * 2.0f * pi;
+                    glm::vec3 p(r * std::cos(ang), y1, r * std::sin(ang));
+                    glm::vec3 n(std::cos(ang), 0, std::sin(ang));
+                    addV(p, n, glm::vec2(u, 1));
+                }
+                for (int sg = 0; sg < segs; ++sg) {
+                    wom.indices.insert(wom.indices.end(), {
+                        bot + sg, top + sg, bot + sg + 1,
+                        bot + sg + 1, top + sg, top + sg + 1
+                    });
+                }
+                // Top cap (faces +Y)
+                uint32_t topC = addV({0, y1, 0}, {0, 1, 0}, {0.5f, 0.5f});
+                for (int sg = 0; sg < segs; ++sg) {
+                    wom.indices.insert(wom.indices.end(),
+                        {topC, top + sg, top + sg + 1});
+                }
+                // Bottom cap (faces -Y)
+                uint32_t botC = addV({0, y0, 0}, {0, -1, 0}, {0.5f, 0.5f});
+                for (int sg = 0; sg < segs; ++sg) {
+                    wom.indices.insert(wom.indices.end(),
+                        {botC, bot + sg + 1, bot + sg});
+                }
+            };
+            // Basin: cylinder from y=0 to y=basinH at basinR.
+            cylinder(basinR, 0.0f, basinH);
+            // Spout: cylinder from y=basinH to y=basinH+spoutH at spoutR.
+            cylinder(spoutR, basinH, basinH + spoutH);
+            wowee::pipeline::WoweeModel::Batch batch;
+            batch.indexStart = 0;
+            batch.indexCount = static_cast<uint32_t>(wom.indices.size());
+            batch.textureIndex = 0;
+            wom.batches.push_back(batch);
+            float maxY = basinH + spoutH;
+            wom.boundMin = glm::vec3(-basinR, 0,    -basinR);
+            wom.boundMax = glm::vec3( basinR, maxY,  basinR);
+            if (!wowee::pipeline::WoweeModelLoader::save(wom, womBase)) {
+                std::fprintf(stderr,
+                    "gen-mesh-fountain: failed to save %s.wom\n", womBase.c_str());
+                return 1;
+            }
+            std::printf("Wrote %s.wom\n", womBase.c_str());
+            std::printf("  basin    : R=%.3f H=%.3f\n", basinR, basinH);
+            std::printf("  spout    : R=%.3f H=%.3f\n", spoutR, spoutH);
+            std::printf("  total H  : %.3f\n", maxY);
+            std::printf("  vertices : %zu\n", wom.vertices.size());
+            std::printf("  triangles: %zu\n", wom.indices.size() / 3);
             return 0;
         } else if (std::strcmp(argv[i], "--displace-mesh") == 0 && i + 2 < argc) {
             // Displaces each vertex along its current normal by the
