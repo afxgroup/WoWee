@@ -17611,7 +17611,10 @@ static ma_result ma_thread_create__posix(ma_thread* pThread, ma_thread_priority 
         }
         #endif
 
-        #if defined(_POSIX_THREAD_ATTR_STACKSIZE) && _POSIX_THREAD_ATTR_STACKSIZE >= 0
+        // AmigaOS4 / clib4 defines _POSIX_THREAD_ATTR_STACKSIZE without a value,
+        // which makes the `&& X >= 0` half of this conditional fail to parse.
+        // Add an `(X+0)` form so empty expansions become 0 and remain >= 0.
+        #if defined(_POSIX_THREAD_ATTR_STACKSIZE) && (_POSIX_THREAD_ATTR_STACKSIZE+0) >= 0
         {
             if (stackSize > 0) {
                 pthread_attr_setstacksize(&attr, stackSize);

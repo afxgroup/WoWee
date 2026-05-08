@@ -119,6 +119,10 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
         ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
         if (len > 0) { buf[len] = '\0'; if (chdir(dirname(buf)) != 0) {} }
     }
+#elif defined(__amigaos4__)
+    // PROGDIR: is an OS-managed assign that always points to the directory
+    // containing the executable, regardless of how the binary was launched.
+    chdir("PROGDIR:");
 #endif
 
     try {

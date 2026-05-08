@@ -8,6 +8,8 @@
 #elif defined(__APPLE__)
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#elif defined(__amigaos4__)
+#include <proto/exec.h>
 #else
 #include <sys/sysinfo.h>
 #endif
@@ -15,7 +17,7 @@
 namespace wowee {
 namespace core {
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__amigaos4__)
 namespace {
 size_t readMemAvailableBytesFromProc() {
     std::ifstream meminfo("/proc/meminfo");
@@ -67,6 +69,16 @@ void MemoryMonitor::initialize() {
         totalRAM_ = kFallbackRAM;
         LOG_WARNING("Could not detect system RAM, assuming 16GB");
     }
+#elif defined(__amigaos4__)
+    // exec.library AvailMem(MEMF_TOTAL) reports total physical RAM in bytes.
+    uint32 total = AvailMem(MEMF_TOTAL);
+    if (total > 0) {
+        totalRAM_ = static_cast<size_t>(total);
+        LOG_INFO("System RAM detected: ", totalRAM_ / kOneGB, " GB");
+    } else {
+        totalRAM_ = kFallbackRAM;
+        LOG_WARNING("Could not detect system RAM, assuming 16GB");
+    }
 #else
     struct sysinfo info;
     if (sysinfo(&info) == 0) {
@@ -94,6 +106,9 @@ size_t MemoryMonitor::getAvailableRAM() const {
         return static_cast<size_t>(usermem);
     }
     return totalRAM_ / 2;
+#elif defined(__amigaos4__)
+    uint32 avail = AvailMem(MEMF_ANY);
+    return (avail > 0) ? static_cast<size_t>(avail) : (totalRAM_ / 2);
 #else
     // Best source on Linux for reclaimable memory headroom.
     if (size_t memAvailable = readMemAvailableBytesFromProc(); memAvailable > 0) {

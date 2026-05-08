@@ -3,6 +3,18 @@
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
 
+#ifdef __amigaos4__
+// clib4 defines _POSIX_THREAD_ATTR_STACKSIZE / _POSIX_THREAD_PRIORITY_SCHEDULING
+// without a value, which trips up miniaudio's `#if defined(X) && X >= 0`
+// checks (operator && has no right operand). Drop the macros before including
+// miniaudio so the fallback paths are taken.
+#  ifdef _POSIX_THREAD_ATTR_STACKSIZE
+#    undef _POSIX_THREAD_ATTR_STACKSIZE
+#  endif
+#  ifdef _POSIX_THREAD_PRIORITY_SCHEDULING
+#    undef _POSIX_THREAD_PRIORITY_SCHEDULING
+#  endif
+#endif
 
 #include "../../extern/miniaudio.h"
 

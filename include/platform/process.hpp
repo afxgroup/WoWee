@@ -15,6 +15,15 @@
   using ProcessHandle = HANDLE;
   inline const ProcessHandle INVALID_PROCESS = INVALID_HANDLE_VALUE;
 
+#elif defined(__amigaos4__)
+  // AmigaOS4 clib4 does not expose POSIX fork/exec. Audio playback via
+  // an ffplay subprocess is unsupported on this platform; the helpers below
+  // become no-ops so callers can still link.
+  #include <sys/types.h>
+
+  using ProcessHandle = int;
+  inline constexpr ProcessHandle INVALID_PROCESS = -1;
+
 #else
   #include <sys/types.h>
   #include <sys/wait.h>
@@ -87,6 +96,9 @@ inline ProcessHandle spawnProcess(const std::vector<std::string>& args) {
     CloseHandle(pi.hThread);
     return pi.hProcess;
 
+#elif defined(__amigaos4__)
+    (void)args;
+    return INVALID_PROCESS;
 #else
     pid_t pid = fork();
     if (pid == 0) {
@@ -118,6 +130,8 @@ inline void killProcess(ProcessHandle& handle) {
     TerminateProcess(handle, 0);
     WaitForSingleObject(handle, 2000);
     CloseHandle(handle);
+#elif defined(__amigaos4__)
+    // No-op: spawnProcess never returns a live handle on this platform.
 #else
     kill(-handle, SIGTERM);  // kill process group
     kill(handle, SIGTERM);
@@ -153,6 +167,9 @@ inline bool isProcessRunning(ProcessHandle& handle) {
         return false;
     }
     return true;
+#elif defined(__amigaos4__)
+    handle = INVALID_PROCESS;
+    return false;
 #else
     int status = 0;
     pid_t result = waitpid(handle, &status, WNOHANG);

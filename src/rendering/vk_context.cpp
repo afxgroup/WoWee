@@ -1,4 +1,6 @@
-#define VMA_IMPLEMENTATION
+// VMA_IMPLEMENTATION lives in vma_impl.cpp — keeping it here would conflict
+// with AmigaOS4's <proto/vulkan.h> macros. Just consume the API from the
+// header below.
 #include "rendering/vk_context.hpp"
 #include "core/logger.hpp"
 #include <VkBootstrap.h>

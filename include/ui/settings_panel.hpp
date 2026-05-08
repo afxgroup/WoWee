@@ -6,6 +6,14 @@
 #include <functional>
 #include <cstdint>
 
+#ifdef __amigaos4__
+// AmigaOS4 intuition/preferences.h defines CUSTOM as a numeric flag, which
+// collides with the GraphicsPreset::CUSTOM enumerator below.
+#  ifdef CUSTOM
+#    undef CUSTOM
+#  endif
+#endif
+
 namespace wowee {
 namespace rendering { class Renderer; }
 namespace audio { class AudioCoordinator; }

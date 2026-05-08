@@ -6,6 +6,24 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(WOWEE_AMIGAOS4 FALSE)
+if(CMAKE_SYSTEM_NAME STREQUAL "AmigaOS4" OR AMIGAOS4)
+    set(WOWEE_AMIGAOS4 TRUE)
+    set(WOWEE_AMIGA_SYSROOT "/usr/ppc-amigaos/SDK/local/clib4")
+    set(WOWEE_AMIGA_COMMON_INCLUDE_DIR "/usr/ppc-amigaos/SDK/local/common/include")
+
+    # Keep package discovery inside the AmigaOS4 SDK sysroot when cross-compiling.
+    list(PREPEND CMAKE_PREFIX_PATH
+        ${WOWEE_AMIGA_SYSROOT}
+        ${WOWEE_AMIGA_SYSROOT}/lib/cmake
+    )
+    list(PREPEND CMAKE_PREFIX_PATH /usr/ppc-amigaos/SDK/local/common)
+    list(PREPEND CMAKE_INCLUDE_PATH ${WOWEE_AMIGA_COMMON_INCLUDE_DIR})
+    list(PREPEND CMAKE_INCLUDE_PATH ${WOWEE_AMIGA_SYSROOT}/include)
+    list(PREPEND CMAKE_LIBRARY_PATH ${WOWEE_AMIGA_SYSROOT}/lib)
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+endif()
+
 # Explicitly tag optimized configs so runtime defaults can enforce low-noise logging.
 add_compile_definitions(
     $<$<CONFIG:Release>:WOWEE_RELEASE_LOGGING>
@@ -28,9 +46,17 @@ option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(WOWEE_BUILD_TESTS "Build tests" ON)
 option(WOWEE_ENABLE_ASAN "Enable AddressSanitizer (Debug builds)" OFF)
 option(WOWEE_ENABLE_TRACY "Enable Tracy profiler instrumentation" OFF)
-option(WOWEE_ENABLE_AMD_FSR2 "Enable AMD FidelityFX FSR2 backend when SDK is present" ON)
-option(WOWEE_ENABLE_AMD_FSR3_FRAMEGEN "Enable AMD FidelityFX SDK FSR3 frame generation interface probe when SDK is present" ON)
-option(WOWEE_BUILD_AMD_FSR3_RUNTIME "Build native AMD FidelityFX VK runtime (Path A) from extern/FidelityFX-SDK/Kits" ON)
+set(_WOWEE_DEFAULT_ENABLE_AMD_FSR2 ON)
+set(_WOWEE_DEFAULT_ENABLE_AMD_FSR3_FRAMEGEN ON)
+set(_WOWEE_DEFAULT_BUILD_AMD_FSR3_RUNTIME ON)
+if(WOWEE_AMIGAOS4)
+    set(_WOWEE_DEFAULT_ENABLE_AMD_FSR2 OFF)
+    set(_WOWEE_DEFAULT_ENABLE_AMD_FSR3_FRAMEGEN OFF)
+    set(_WOWEE_DEFAULT_BUILD_AMD_FSR3_RUNTIME OFF)
+endif()
+option(WOWEE_ENABLE_AMD_FSR2 "Enable AMD FidelityFX FSR2 backend when SDK is present" ${_WOWEE_DEFAULT_ENABLE_AMD_FSR2})
+option(WOWEE_ENABLE_AMD_FSR3_FRAMEGEN "Enable AMD FidelityFX SDK FSR3 frame generation interface probe when SDK is present" ${_WOWEE_DEFAULT_ENABLE_AMD_FSR3_FRAMEGEN})
+option(WOWEE_BUILD_AMD_FSR3_RUNTIME "Build native AMD FidelityFX VK runtime (Path A) from extern/FidelityFX-SDK/Kits" ${_WOWEE_DEFAULT_BUILD_AMD_FSR3_RUNTIME})
 
 # AMD FidelityFX FSR2 SDK detection (drop-in under extern/FidelityFX-FSR2)
 set(WOWEE_AMD_FSR2_DIR ${CMAKE_SOURCE_DIR}/extern/FidelityFX-FSR2)
@@ -246,15 +272,62 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 # Find required packages
-find_package(SDL2 REQUIRED)
+if(WOWEE_AMIGAOS4 AND EXISTS ${CMAKE_SOURCE_DIR}/extern/SDL2/libSDL2.a)
+    set(WOWEE_AMIGA_SDL2_DIR ${CMAKE_SOURCE_DIR}/extern/SDL2)
+    set(WOWEE_AMIGA_SDL2_LIBRARY ${WOWEE_AMIGA_SDL2_DIR}/libSDL2.a)
+
+    add_library(SDL2::SDL2 STATIC IMPORTED)
+    set_target_properties(SDL2::SDL2 PROPERTIES
+        IMPORTED_LOCATION ${WOWEE_AMIGA_SDL2_LIBRARY}
+        INTERFACE_INCLUDE_DIRECTORIES ${WOWEE_AMIGA_SDL2_DIR}/include
+        INTERFACE_LINK_LIBRARIES "Threads::Threads;auto"
+        IMPORTED_LINK_INTERFACE_LANGUAGES "C")
+    message(STATUS "Using prebuilt AmigaOS4 SDL2 static library: ${WOWEE_AMIGA_SDL2_LIBRARY}")
+elseif(WOWEE_AMIGAOS4)
+    find_package(SDL2 CONFIG REQUIRED)
+else()
+    find_package(SDL2 REQUIRED)
+endif()
+
 find_package(Vulkan QUIET)
 if(NOT Vulkan_FOUND)
+    if(WOWEE_AMIGAOS4)
+        set(WOWEE_AMIGA_VULKAN_INCLUDE_DIR "")
+        if(EXISTS "${WOWEE_AMIGA_COMMON_INCLUDE_DIR}/vulkan/vulkan.h")
+            set(WOWEE_AMIGA_VULKAN_INCLUDE_DIR ${WOWEE_AMIGA_COMMON_INCLUDE_DIR})
+        elseif(EXISTS "${WOWEE_AMIGA_SYSROOT}/include/vulkan/vulkan.h")
+            set(WOWEE_AMIGA_VULKAN_INCLUDE_DIR ${WOWEE_AMIGA_SYSROOT}/include)
+        endif()
+
+        if(WOWEE_AMIGA_VULKAN_INCLUDE_DIR)
+            # On AmigaOS4 Vulkan ships as a shared library (vulkan.library) that is
+            # loaded and dispatched by SDL2 — no link-time loader/import library is
+            # required, so Vulkan::Vulkan only carries the include path.
+            if(NOT TARGET Vulkan::Vulkan)
+                add_library(Vulkan::Vulkan INTERFACE IMPORTED)
+            endif()
+            set_target_properties(Vulkan::Vulkan PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "${WOWEE_AMIGA_VULKAN_INCLUDE_DIR}")
+            set_property(TARGET Vulkan::Vulkan APPEND PROPERTY
+                INTERFACE_COMPILE_DEFINITIONS __USE_INLINE__)
+            # AmigaOS4 vulkan_core.h omits the legacy Vulkan 1.0 barrier structs
+            # and several enum values that upstream Vulkan code expects. Force-
+            # include a compat shim into every Vulkan-linking target.
+            set(WOWEE_AMIGA_VULKAN_COMPAT_HEADER
+                ${CMAKE_SOURCE_DIR}/include/third_party/amigaos4_vulkan_compat.h)
+            set_property(TARGET Vulkan::Vulkan APPEND PROPERTY
+                INTERFACE_COMPILE_OPTIONS "-include${WOWEE_AMIGA_VULKAN_COMPAT_HEADER}")
+            set(Vulkan_FOUND TRUE)
+            message(STATUS "Found Vulkan headers for AmigaOS4 in ${WOWEE_AMIGA_VULKAN_INCLUDE_DIR} (shared vulkan.library, loaded via SDL2)")
+        else()
+            message(FATAL_ERROR "Could not find Vulkan headers for AmigaOS4. Expected vulkan/vulkan.h under ${WOWEE_AMIGA_COMMON_INCLUDE_DIR} or ${WOWEE_AMIGA_SYSROOT}/include.")
+        endif()
     # For Windows cross-compilation the host pkg-config finds the Linux libvulkan-dev
     # and injects /usr/include as an INTERFACE_INCLUDE_DIRECTORY, which causes
     # MinGW clang to pull in glibc headers (bits/libc-header-start.h) instead of
     # the MinGW sysroot headers.  Skip the host pkg-config path entirely and instead
     # locate Vulkan via vcpkg-installed vulkan-headers or the MinGW toolchain.
-    if(CMAKE_CROSSCOMPILING AND WIN32)
+    elseif(CMAKE_CROSSCOMPILING AND WIN32)
         # The cross-compile build script generates a Vulkan import library
         # (libvulkan-1.a) in ${CMAKE_BINARY_DIR}/vulkan-import from the headers.
         set(_VULKAN_IMPORT_DIR "${CMAKE_BINARY_DIR}/vulkan-import")
@@ -341,16 +414,32 @@ endif()
 if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(WOWEE_MACOS_CROSS_COMPILE TRUE)
 endif()
+
+if(WOWEE_AMIGAOS4)
+    set(OPENSSL_ROOT_DIR ${WOWEE_AMIGA_SYSROOT})
+    set(ZLIB_ROOT ${WOWEE_AMIGA_SYSROOT})
+    # AmigaOS4 ld refuses static linking against shared objects; force the
+    # static archives explicitly.
+    set(ZLIB_USE_STATIC_LIBS TRUE)
+    set(ZLIB_LIBRARY ${WOWEE_AMIGA_SYSROOT}/lib/libz.a CACHE FILEPATH "" FORCE)
+    # AmigaOS4 has no libdl — dynamic library loading is handled by exec.library.
+    # Suppress the -ldl that CMake injects via CMAKE_DL_LIBS on POSIX systems.
+    set(CMAKE_DL_LIBS "")
+endif()
+
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
-if(WIN32)
+if(WIN32 OR WOWEE_AMIGAOS4)
     find_package(PkgConfig QUIET)
 else()
     find_package(PkgConfig REQUIRED)
 endif()
-if(PkgConfig_FOUND)
+if(PkgConfig_FOUND AND NOT WOWEE_AMIGAOS4)
     pkg_check_modules(FFMPEG libavformat libavcodec libswscale libavutil)
+elseif(WOWEE_AMIGAOS4)
+    set(HAVE_FFMPEG FALSE)
+    message(STATUS "FFmpeg discovery disabled for AmigaOS4 cross-builds")
 else()
     # Fallback for MSVC/vcpkg — find FFmpeg libraries manually
     find_path(FFMPEG_INCLUDE_DIRS libavformat/avformat.h)
@@ -385,7 +474,26 @@ endif()
 # GLM (header-only math library)
 find_package(glm QUIET)
 if(NOT glm_FOUND)
-    message(STATUS "GLM not found, will use system includes or download")
+    # Vendored copy under extern/glm takes priority; fall back to FetchContent.
+    if(EXISTS ${CMAKE_SOURCE_DIR}/extern/glm/glm/glm.hpp)
+        add_library(glm_headers INTERFACE)
+        target_include_directories(glm_headers INTERFACE ${CMAKE_SOURCE_DIR}/extern/glm)
+        add_library(glm::glm ALIAS glm_headers)
+        set(glm_FOUND TRUE)
+        message(STATUS "Using vendored GLM at ${CMAKE_SOURCE_DIR}/extern/glm")
+    else()
+        include(FetchContent)
+        FetchContent_Declare(glm
+            GIT_REPOSITORY https://github.com/g-truc/glm.git
+            GIT_TAG        1.0.1
+            GIT_SHALLOW    TRUE
+        )
+        FetchContent_MakeAvailable(glm)
+        if(TARGET glm::glm OR TARGET glm)
+            set(glm_FOUND TRUE)
+            message(STATUS "GLM fetched via FetchContent")
+        endif()
+    endif()
 endif()
 # GLM GTX extensions (quaternion, norm, etc.) require this flag on newer GLM versions
 add_compile_definitions(GLM_ENABLE_EXPERIMENTAL GLM_FORCE_DEPTH_ZERO_TO_ONE)
@@ -466,6 +574,9 @@ if(EXISTS ${IMGUI_DIR})
         ${IMGUI_DIR}/backends
     )
     target_link_libraries(imgui PUBLIC SDL2::SDL2 Vulkan::Vulkan ${CMAKE_DL_LIBS})
+    if(TARGET wowee_sdl2_amigaos4_build)
+        add_dependencies(imgui wowee_sdl2_amigaos4_build)
+    endif()
 else()
     message(WARNING "ImGui not found in extern/imgui. Clone it with:")
     message(WARNING "  git clone https://github.com/ocornut/imgui.git extern/imgui")
@@ -601,6 +712,7 @@ set(WOWEE_SOURCES
 
     # Rendering (Vulkan infrastructure)
     src/rendering/vk_context.cpp
+    src/rendering/vma_impl.cpp
     src/rendering/vk_utils.cpp
     src/rendering/vk_shader.cpp
     src/rendering/vk_texture.cpp
@@ -900,6 +1012,19 @@ endif()
 
 # Create executable
 add_executable(wowee ${WOWEE_SOURCES} ${WOWEE_HEADERS} ${WOWEE_PLATFORM_SOURCES})
+if(TARGET wowee_sdl2_amigaos4_build)
+    add_dependencies(wowee wowee_sdl2_amigaos4_build)
+endif()
+
+# VMA's translation unit must skip the AmigaOS4 <proto/vulkan.h> auto-include
+# because it uses bare `vkXxx` identifiers as struct fields and as function-
+# pointer values, which the inline-dispatch macros would mangle.
+if(WOWEE_AMIGAOS4)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/src/rendering/vma_impl.cpp
+        PROPERTIES COMPILE_DEFINITIONS WOWEE_AMIGA_NO_VULKAN_INLINE
+    )
+endif()
 
 # Tracy profiler — zero overhead when WOWEE_ENABLE_TRACY is OFF
 if(WOWEE_ENABLE_TRACY)
@@ -957,6 +1082,12 @@ target_link_libraries(wowee PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
+if(WOWEE_AMIGAOS4)
+    # PPC 32-bit AmigaOS4 has no native 64-bit atomic instructions; gcc emits
+    # calls to __atomic_*_8 helpers that live in libatomic.
+    target_link_libraries(wowee PRIVATE atomic)
+endif()
+
 if(HAVE_FFMPEG)
     target_compile_definitions(wowee PRIVATE HAVE_FFMPEG)
     target_link_libraries(wowee PRIVATE ${FFMPEG_LIBRARIES})
@@ -966,7 +1097,7 @@ if(HAVE_FFMPEG)
 endif()
 
 # Platform-specific libraries
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT WOWEE_AMIGAOS4)
     target_link_libraries(wowee PRIVATE X11)
 endif()
 if(WIN32)
@@ -1153,7 +1284,7 @@ if(WIN32)
 endif()
 
 # Linux desktop integration (launcher + icon)
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT WOWEE_AMIGAOS4)
     set(WOWEE_LINUX_ICON_PATH "${CMAKE_INSTALL_FULL_DATAROOTDIR}/icons/hicolor/256x256/apps/wowee.png")
     configure_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/resources/wowee.desktop.in
@@ -1345,6 +1476,7 @@ add_executable(wowee_editor
 
     # Rendering core
     src/rendering/vk_context.cpp
+    src/rendering/vma_impl.cpp
     src/rendering/vk_utils.cpp
     src/rendering/vk_shader.cpp
     src/rendering/vk_texture.cpp
@@ -1368,6 +1500,9 @@ add_executable(wowee_editor
     # stb_image (needed by AssetManager for PNG overrides)
     tools/editor/stb_image_impl.cpp
 )
+if(TARGET wowee_sdl2_amigaos4_build)
+    add_dependencies(wowee_editor wowee_sdl2_amigaos4_build)
+endif()
 target_include_directories(wowee_editor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -1391,7 +1526,7 @@ if(TARGET glm::glm)
 elseif(glm_FOUND)
     target_include_directories(wowee_editor PRIVATE ${GLM_INCLUDE_DIRS})
 endif()
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT WOWEE_AMIGAOS4)
     find_package(X11 QUIET)
     if(X11_FOUND)
         target_link_libraries(wowee_editor PRIVATE X11)
@@ -1418,6 +1553,7 @@ message(STATUS "  wowee_editor tool: ENABLED")
 # Print configuration summary
 message(STATUS "")
 message(STATUS "Wowee Configuration:")
+message(STATUS "  Target Platform: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  SDL2: ${SDL2_VERSION}")
@@ -1448,6 +1584,8 @@ if(WIN32)
         "Delete '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Wowee.lnk'")
 elseif(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
+elseif(WOWEE_AMIGAOS4)
+    set(CPACK_GENERATOR "TGZ")
 else()
     # Linux — generate postinst/prerm wrapper scripts
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/packaging)

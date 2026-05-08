@@ -11,8 +11,14 @@
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
-#include <openssl/param_build.h>
-#include <openssl/core_names.h>
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#  include <openssl/param_build.h>
+#  include <openssl/core_names.h>
+#  define WOWEE_HAS_OPENSSL3 1
+#else
+#  define WOWEE_HAS_OPENSSL3 0
+#endif
 
 #ifdef _WIN32
     #ifndef WIN32_LEAN_AND_MEAN
@@ -387,6 +393,7 @@ bool WardenModule::verifyRSASignature(const std::vector<uint8_t>& data) {
     int decryptedLen = -1;
 
     {
+#if WOWEE_HAS_OPENSSL3
         OSSL_PARAM_BLD* bld = OSSL_PARAM_BLD_new();
         OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, n);
         OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, e);
@@ -399,6 +406,24 @@ bool WardenModule::verifyRSASignature(const std::vector<uint8_t>& data) {
         }
         if (fromCtx) EVP_PKEY_CTX_free(fromCtx);
         OSSL_PARAM_free(params);
+#else
+        // OpenSSL 1.1.x: assemble the RSA key via the legacy API and wrap it
+        // in an EVP_PKEY for the verify-recover path that follows.
+        RSA* rsa = RSA_new();
+        if (rsa && RSA_set0_key(rsa, n, e, nullptr) == 1) {
+            // RSA_set0_key takes ownership of n and e on success.
+            n = nullptr;
+            e = nullptr;
+            pkey = EVP_PKEY_new();
+            if (pkey && EVP_PKEY_assign_RSA(pkey, rsa) != 1) {
+                EVP_PKEY_free(pkey);
+                pkey = nullptr;
+                RSA_free(rsa);
+            }
+        } else if (rsa) {
+            RSA_free(rsa);
+        }
+#endif
 
         if (pkey) {
             ctx = EVP_PKEY_CTX_new(pkey, nullptr);
@@ -413,8 +438,8 @@ bool WardenModule::verifyRSASignature(const std::vector<uint8_t>& data) {
         }
     }
 
-    BN_free(n);
-    BN_free(e);
+    if (n) BN_free(n);
+    if (e) BN_free(e);
     if (ctx) EVP_PKEY_CTX_free(ctx);
     if (pkey) EVP_PKEY_free(pkey);
 

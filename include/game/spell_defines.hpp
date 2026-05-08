@@ -5,6 +5,14 @@
 #include <string>
 #include <vector>
 
+#ifdef __amigaos4__
+// AmigaOS4 amiga_compiler.h defines INTERRUPT as a compiler attribute keyword,
+// which collides with the CombatTextEntry::Type::INTERRUPT enumerator below.
+#  ifdef INTERRUPT
+#    undef INTERRUPT
+#  endif
+#endif
+
 namespace wowee {
 namespace game {
 

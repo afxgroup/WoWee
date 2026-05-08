@@ -16,3 +16,12 @@
 	url = https://github.com/Kelsidavis/FidelityFX-FSR2.git
 	shallow = true
 	ignore = dirty
+[submodule "extern/VulkanOS4"]
+	path = extern/VulkanOS4
+	url = https://github.com/derfsss/VulkanOS4.git
+	shallow = true
+
+[submodule "extern/SDL2"]
+	path = extern/SDL2
+	url = https://github.com/AmigaPorts/SDL.git
+	branch = SDL2
